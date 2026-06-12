@@ -29,8 +29,8 @@ A modern web application providing AI-powered customer support capabilities with
 
 1. Clone the repository:
 ```bash
-git clone <repository-url>
-cd ai-powered-support-agent
+git clone https://github.com/Ajay-Maury/AI-Support-Agent.git
+cd ai-support-agent
 ```
 
 2. Install dependencies:
