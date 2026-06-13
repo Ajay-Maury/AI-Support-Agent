@@ -1,4 +1,37 @@
+import axios from "axios";
+
 export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3000";
+
+export const http = axios.create({
+  baseURL: API_BASE,
+  headers: { "Content-Type": "application/json" },
+});
+
+export function extractErrorMessage(err: unknown): string {
+  if (axios.isAxiosError(err)) {
+    if (err.code === "ERR_NETWORK" || err.message === "Network Error") {
+      return "Cannot reach the server. Please check your connection or try again later.";
+    }
+    if (err.code === "ECONNABORTED") return "Request timed out. Please try again.";
+    const status = err.response?.status;
+    const data: any = err.response?.data;
+    const apiMsg =
+      (typeof data === "string" && data) ||
+      data?.error ||
+      data?.message ||
+      data?.detail;
+    if (status && status >= 500) return apiMsg || `Server error (${status}). Please try again.`;
+    if (status === 404) return apiMsg || "Not found.";
+    if (status === 401 || status === 403) return apiMsg || "You are not authorized.";
+    if (status) return apiMsg || `Request failed (${status}).`;
+    return err.message || "Request failed.";
+  }
+  if (err instanceof TypeError && /fetch|network/i.test(err.message)) {
+    return "Cannot reach the server. Please check your connection or try again later.";
+  }
+  if (err instanceof Error) return err.message;
+  return "Something went wrong.";
+}
 
 export type Source = { filename: string; chunk_index: number; score: number };
 export type ChatResponse = { answer: string; sources: Source[]; session_id: string };
@@ -6,69 +39,60 @@ export type Message = {
   role: "user" | "assistant";
   content: string;
   sources?: Source[];
+  created_at?: string;
 };
 export type SessionSummary = { session_id: string; title?: string; updated_at?: string };
 export type DocumentItem = {
-  doc_id: string;
+  id: string;
   filename: string;
   status: string;
   created_at?: string;
 };
 
 export async function askChat(question: string, session_id?: string): Promise<ChatResponse> {
-  const res = await fetch(`${API_BASE}/api/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ question, session_id }),
-  });
-  if (!res.ok) throw new Error(`Chat failed: ${res.status}`);
-  return res.json();
+  const { data } = await http.post<ChatResponse>("/api/chat", { question, session_id });
+  return data;
 }
 
 export async function listSessions(): Promise<SessionSummary[]> {
-  const res = await fetch(`${API_BASE}/api/chat`);
-  if (!res.ok) throw new Error(`Sessions failed: ${res.status}`);
-  const data = await res.json();
+  const { data } = await http.get("/api/chat");
   return Array.isArray(data) ? data : data.sessions ?? [];
 }
 
 export async function loadSession(id: string): Promise<{ messages: Message[]; session_id: string }> {
-  const res = await fetch(`${API_BASE}/api/chat/${id}`);
-  if (!res.ok) throw new Error(`Load failed: ${res.status}`);
-  const data = await res.json();
+  const { data } = await http.get(`/api/chat/${id}`);
   const messages: Message[] = (data.messages || data.history || []).map((m: any) => ({
     role: m.role,
     content: m.content ?? m.answer ?? m.question ?? "",
     sources: m.sources,
+    created_at: m.created_at ?? m.timestamp ?? m.createdAt,
   }));
   return { messages, session_id: data.session_id || id };
 }
 
 export async function listDocuments(): Promise<DocumentItem[]> {
-  const res = await fetch(`${API_BASE}/api/docs`);
-  if (!res.ok) throw new Error(`Docs failed: ${res.status}`);
-  const data = await res.json();
+  const { data } = await http.get("/api/docs");
   return Array.isArray(data) ? data : data.documents ?? [];
 }
 
 export async function uploadDocument(file: File): Promise<DocumentItem> {
   const fd = new FormData();
   fd.append("file", file);
-  const res = await fetch(`${API_BASE}/api/docs/upload`, { method: "POST", body: fd });
-  if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-  return res.json();
+  const { data } = await http.post<DocumentItem>("/api/docs/upload", fd, {
+    headers: { "Content-Type": "multipart/form-data" },
+  });
+  return data;
 }
 
 export async function getDocStatus(id: string): Promise<DocumentItem> {
-  const res = await fetch(`${API_BASE}/api/docs/${id}/status`);
-  if (!res.ok) throw new Error(`Status failed: ${res.status}`);
-  return res.json();
+  const { data } = await http.get<DocumentItem>(`/api/docs/${id}/status`);
+  return data;
 }
 
 export async function checkHealth(): Promise<boolean> {
   try {
-    const res = await fetch(`${API_BASE}/health`);
-    return res.ok;
+    await http.get("/health");
+    return true;
   } catch {
     return false;
   }

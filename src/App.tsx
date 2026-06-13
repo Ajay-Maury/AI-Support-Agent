@@ -2,12 +2,32 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { MessageSquare, FileText, Sparkles } from "lucide-react";
 import { API_BASE, checkHealth } from "./lib/api";
+import { toast } from "sonner";
 
 export default function App() {
   const [healthy, setHealthy] = useState<boolean | null>(null);
   useEffect(() => {
     let active = true;
-    const ping = () => checkHealth().then((ok) => active && setHealthy(ok));
+    let wasHealthy: boolean | null = null;
+    const ping = () =>
+      checkHealth().then((ok) => {
+        if (!active) return;
+        setHealthy(ok);
+        if (wasHealthy === true && ok === false) {
+          toast.error("Backend is offline", {
+            description: "We can't reach the server right now. Retrying…",
+            id: "backend-offline",
+          });
+        } else if (wasHealthy === false && ok === true) {
+          toast.success("Backend is back online", { id: "backend-online" });
+        } else if (wasHealthy === null && ok === false) {
+          toast.error("Backend is offline", {
+            description: "We can't reach the server right now.",
+            id: "backend-offline",
+          });
+        }
+        wasHealthy = ok;
+      });
     ping();
     const t = setInterval(ping, 15000);
     return () => {

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Upload, Loader2, RefreshCw, FileText, FileUp, CheckCircle2, AlertCircle } from "lucide-react";
-import { getDocStatus, listDocuments, uploadDocument, type DocumentItem } from "../lib/api";
+import { getDocStatus, listDocuments, uploadDocument, extractErrorMessage, type DocumentItem } from "../lib/api";
+import { toast } from "sonner";
 
 export default function Documents() {
   const [docs, setDocs] = useState<DocumentItem[]>([]);
@@ -11,8 +12,11 @@ export default function Documents() {
   async function refresh() {
     try {
       setDocs(await listDocuments());
+      setError(null);
     } catch (e: any) {
-      setError(e?.message || "Failed to load");
+      const msg = extractErrorMessage(e);
+      setError(msg);
+      toast.error("Failed to load documents", { description: msg });
     }
   }
 
@@ -42,9 +46,12 @@ export default function Documents() {
     setError(null);
     try {
       await uploadDocument(file);
+      toast.success("Document uploaded", { description: file.name });
       await refresh();
     } catch (e: any) {
-      setError(e?.message || "Upload failed");
+      const msg = extractErrorMessage(e);
+      setError(msg);
+      toast.error("Upload failed", { description: msg });
     } finally {
       setUploading(false);
       if (fileRef.current) fileRef.current.value = "";

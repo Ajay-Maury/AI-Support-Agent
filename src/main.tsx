@@ -5,6 +5,7 @@ import App from "./App";
 import Chat from "./pages/Chat";
 import Documents from "./pages/Documents";
 import "./index.css";
+import { Toaster } from "sonner";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
@@ -18,5 +19,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
         </Route>
       </Routes>
     </BrowserRouter>
+    <Toaster position="top-right" richColors closeButton />
   </React.StrictMode>
 );

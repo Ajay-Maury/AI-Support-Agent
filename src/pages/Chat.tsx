@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Send, Loader2, Plus, MessageSquare, Sparkles, User, Copy, Check, Zap, RotateCcw } from "lucide-react";
+import { Send, Loader2, Plus, MessageSquare, Sparkles, User, Copy, Check, Zap, RotateCcw, Clock, AlertCircle } from "lucide-react";
+import { toast } from "sonner";
 import {
   askChat,
   listSessions,
   loadSession,
   streamChat,
+  extractErrorMessage,
   type Message,
   type SessionSummary,
   type Source,
@@ -31,7 +33,11 @@ export default function Chat() {
     if (sessionId) {
       loadSession(sessionId)
         .then((d) => setMessages(d.messages))
-        .catch((e) => setError(String(e)));
+        .catch((e) => {
+          const msg = extractErrorMessage(e);
+          setError(msg);
+          toast.error("Failed to load chat", { description: msg });
+        });
     } else {
       setMessages([]);
     }
@@ -48,8 +54,9 @@ export default function Chat() {
   async function refreshSessions() {
     try {
       setSessions(await listSessions());
-    } catch {
-      /* ignore */
+    } catch (e) {
+      // Silent: sidebar refresh shouldn't spam toasts, but warn once on first failure.
+      console.warn("Failed to load sessions:", extractErrorMessage(e));
     }
   }
 
@@ -62,8 +69,13 @@ export default function Chat() {
 
   async function runQuestion(q: string) {
     setError(null);
-    const userMsg: Message = { role: "user", content: q };
-    setMessages((m) => [...m, userMsg, { role: "assistant", content: "" }]);
+    const now = new Date().toISOString();
+    const userMsg: Message = { role: "user", content: q, created_at: now };
+    setMessages((m) => [
+      ...m,
+      userMsg,
+      { role: "assistant", content: "", created_at: new Date().toISOString() },
+    ]);
     setLoading(true);
 
     try {
@@ -77,7 +89,12 @@ export default function Chat() {
             assistantText += t;
             setMessages((m) => {
               const copy = [...m];
-              copy[copy.length - 1] = { role: "assistant", content: assistantText, sources };
+              copy[copy.length - 1] = {
+                ...copy[copy.length - 1],
+                role: "assistant",
+                content: assistantText,
+                sources,
+              };
               return copy;
             });
           },
@@ -88,7 +105,12 @@ export default function Chat() {
             sources = s;
             setMessages((m) => {
               const copy = [...m];
-              copy[copy.length - 1] = { role: "assistant", content: assistantText, sources: s };
+              copy[copy.length - 1] = {
+                ...copy[copy.length - 1],
+                role: "assistant",
+                content: assistantText,
+                sources: s,
+              };
               return copy;
             });
           },
@@ -101,6 +123,7 @@ export default function Chat() {
         setMessages((m) => {
           const copy = [...m];
           copy[copy.length - 1] = {
+            ...copy[copy.length - 1],
             role: "assistant",
             content: res.answer,
             sources: res.sources,
@@ -113,7 +136,9 @@ export default function Chat() {
       }
       refreshSessions();
     } catch (e: any) {
-      setError(e?.message || "Request failed");
+      const msg = extractErrorMessage(e);
+      setError(msg);
+      toast.error("Message failed", { description: msg });
       setMessages((m) => m.slice(0, -1));
     } finally {
       setLoading(false);
@@ -138,7 +163,7 @@ export default function Chat() {
       <aside className="hidden w-64 shrink-0 flex-col rounded-2xl border border-slate-200/70 bg-white/80 shadow-sm backdrop-blur md:flex">
         <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
           <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-            Sessions
+            Chat History
           </span>
           <button
             onClick={() => navigate("/chat")}
@@ -167,7 +192,20 @@ export default function Chat() {
                 size={13}
                 className={`shrink-0 ${s.session_id === sessionId ? "text-indigo-300" : "text-slate-400"}`}
               />
-              <span className="truncate font-medium">{s.title || s.session_id.slice(0, 8)}</span>
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate font-medium">
+                  {s.title || s.session_id.slice(0, 8)}
+                </span>
+                {s.updated_at && (
+                  <span
+                    className={`truncate text-[10px] ${
+                      s.session_id === sessionId ? "text-slate-300" : "text-slate-400"
+                    }`}
+                  >
+                    {formatSessionDate(s.updated_at)}
+                  </span>
+                )}
+              </span>
             </button>
           ))}
         </div>
@@ -176,18 +214,52 @@ export default function Chat() {
       <section className="relative flex flex-1 flex-col overflow-hidden rounded-2xl border border-slate-200/70 bg-white/80 shadow-sm backdrop-blur">
         <div ref={scrollRef} className="flex-1 space-y-6 overflow-y-auto px-4 py-6 sm:px-8">
           {messages.length === 0 && !loading && <EmptyState onPick={(q) => setInput(q)} />}
-          {messages.map((m, i) => (
-            <Bubble
-              key={i}
-              message={m}
-              isLast={i === messages.length - 1}
-              loading={loading}
-              onRetry={() => retryFrom(i)}
-            />
-          ))}
+          {(() => {
+            const lastUserIdx = (() => {
+              for (let j = messages.length - 1; j >= 0; j--) {
+                if (messages[j].role === "user") return j;
+              }
+              return -1;
+            })();
+            let lastDayKey = "";
+            return messages.map((m, i) => {
+              const ts = m.created_at ? new Date(m.created_at) : null;
+              const dayKey = ts ? ts.toDateString() : "";
+              const showDate = !!ts && dayKey !== lastDayKey;
+              if (ts) lastDayKey = dayKey;
+              return (
+                <Bubble
+                  key={i}
+                  message={m}
+                  isLast={i === messages.length - 1}
+                  loading={loading}
+                  canRetry={i === lastUserIdx && !loading}
+                  onRetry={() => retryFrom(i)}
+                  stamp={ts ? formatStamp(ts, showDate) : null}
+                />
+              );
+            });
+          })()}
           {error && (
-            <div className="mx-auto max-w-md rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 shadow-sm">
-              {error}
+            <div className="mx-auto flex max-w-md items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 shadow-sm">
+              <AlertCircle size={14} className="mt-0.5 shrink-0" />
+              <span className="flex-1">{error}</span>
+              {messages.length > 0 && messages[messages.length - 1]?.role === "user" === false && (
+                <button
+                  onClick={() => {
+                    // find last user message and retry
+                    for (let i = messages.length - 1; i >= 0; i--) {
+                      if (messages[i].role === "user") {
+                        retryFrom(i);
+                        break;
+                      }
+                    }
+                  }}
+                  className="rounded-md border border-red-200 bg-white px-2 py-0.5 text-[11px] font-medium text-red-700 hover:bg-red-100"
+                >
+                  Retry
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -250,6 +322,39 @@ export default function Chat() {
 }
 
 function EmptyState({ onPick }: { onPick: (q: string) => void }) {
+  return _EmptyState(onPick);
+}
+
+function formatStamp(d: Date, withDate: boolean) {
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (!withDate) return time;
+  const today = new Date();
+  const yest = new Date();
+  yest.setDate(today.getDate() - 1);
+  const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
+  if (same(d, today)) return `Today · ${time}`;
+  if (same(d, yest)) return `Yesterday · ${time}`;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric", year: today.getFullYear() === d.getFullYear() ? undefined : "numeric" })} · ${time}`;
+}
+
+function formatSessionDate(iso: string) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const today = new Date();
+  const yest = new Date();
+  yest.setDate(today.getDate() - 1);
+  const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
+  const time = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (same(d, today)) return `Today · ${time}`;
+  if (same(d, yest)) return `Yesterday · ${time}`;
+  return d.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    year: today.getFullYear() === d.getFullYear() ? undefined : "numeric",
+  });
+}
+
+function _EmptyState(onPick: (q: string) => void) {
   const suggestions = [
     "What is the return policy?",
     "What payment methods do you accept?",
@@ -284,12 +389,16 @@ function Bubble({
   message,
   isLast,
   loading,
+  canRetry,
   onRetry,
+  stamp,
 }: {
   message: Message;
   isLast: boolean;
   loading: boolean;
+  canRetry: boolean;
   onRetry: () => void;
+  stamp: string | null;
 }) {
   const isUser = message.role === "user";
   const showTyping = !isUser && isLast && loading && !message.content;
@@ -308,6 +417,16 @@ function Bubble({
         </div>
       )}
       <div className={`max-w-[78%] ${isUser ? "items-end" : "items-start"} flex flex-col`}>
+        {stamp && (
+          <div
+            className={`mb-1 flex items-center gap-1 text-[10px] uppercase tracking-wider text-slate-400 ${
+              isUser ? "justify-end" : "justify-start"
+            }`}
+          >
+            <Clock size={10} className="opacity-70" />
+            <span>{stamp}</span>
+          </div>
+        )}
         <div
           className={`whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-[14px] leading-relaxed shadow-sm ${
             isUser
@@ -359,7 +478,7 @@ function Bubble({
               {copied ? <Check size={11} /> : <Copy size={11} />}
               {copied ? "Copied" : "Copy"}
             </button>
-            {isUser && (
+            {isUser && canRetry && (
               <button
                 onClick={onRetry}
                 disabled={loading}
